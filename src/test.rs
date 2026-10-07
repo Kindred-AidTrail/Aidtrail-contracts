@@ -327,6 +327,55 @@ fn test_release_milestone_success_and_invariants() {
     assert!(f.client.try_release_milestone(&ngo, &p_id, &m_id).is_err());
 }
 
+#[test]
+fn test_vendor_registration_removal_and_categories() {
+    let f = TestFixture::setup();
+    let vendor = Address::generate(&f.env);
+
+    let food = Symbol::new(&f.env, "FOOD");
+    let med = Symbol::new(&f.env, "MEDICINE");
+    let shelter = Symbol::new(&f.env, "SHELTER");
+
+    let mut categories = Vec::new(&f.env);
+    categories.push_back(food.clone());
+    categories.push_back(med.clone());
+
+    let meta = String::from_str(&f.env, "ipfs://vendor-profile");
+
+    // Non-admin fails
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_register_vendor(&rando, &vendor, &categories, &meta).is_err());
+
+    // Empty categories fail
+    let empty_cats = Vec::new(&f.env);
+    assert!(f.client.try_register_vendor(&f.admin, &vendor, &empty_cats, &meta).is_err());
+
+    // Admin registers vendor
+    f.client.register_vendor(&f.admin, &vendor, &categories, &meta);
+    assert_eq!(f.client.get_vendor_count(), 1);
+
+    let v = f.client.get_vendor(&vendor);
+    assert_eq!(v.status, VendorStatus::Active);
+    assert_eq!(v.total_redeemed, 0);
+    assert_eq!(v.allowed_categories.len(), 2);
+
+    assert_eq!(f.client.is_vendor_allowed(&vendor, &food), true);
+    assert_eq!(f.client.is_vendor_allowed(&vendor, &med), true);
+    assert_eq!(f.client.is_vendor_allowed(&vendor, &shelter), false);
+
+    // Admin removes/suspends vendor
+    f.client.remove_vendor(&f.admin, &vendor);
+    let v_suspended = f.client.get_vendor(&vendor);
+    assert_eq!(v_suspended.status, VendorStatus::Suspended);
+    assert_eq!(f.client.is_vendor_allowed(&vendor, &food), false);
+
+    // Admin reactivates vendor
+    f.client.set_vendor_status(&f.admin, &vendor, &VendorStatus::Active);
+    assert_eq!(f.client.get_vendor(&vendor).status, VendorStatus::Active);
+    assert_eq!(f.client.is_vendor_allowed(&vendor, &food), true);
+}
+
+
 
 
 
