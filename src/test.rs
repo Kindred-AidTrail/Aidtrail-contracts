@@ -546,6 +546,81 @@ fn test_redeem_success_and_direct_vendor_payout() {
     assert!(f.client.try_redeem(&beneficiary, &v_id, &food_vendor).is_err());
 }
 
+#[test]
+fn test_reclaim_expired_voucher_returns_allocation() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-reclaim");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Setup milestone (5,000) and funding (5,000)
+    let v_verifier = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v_verifier.clone());
+    let m_id = f.client.add_milestone(
+        &ngo,
+        &p_id,
+        &5_000,
+        &String::from_str(&f.env, "m"),
+        &1,
+        &verifiers,
+    );
+
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 5_000);
+    f.client.fund_program(&donor, &p_id, &5_000);
+
+    f.client.approve_milestone(&v_verifier, &p_id, &m_id, &String::from_str(&f.env, "e"));
+    f.client.release_milestone(&ngo, &p_id, &m_id);
+
+    // Issue 5,000 voucher expiring in 100 seconds
+    let beneficiary = Address::generate(&f.env);
+    let food_cat = Symbol::new(&f.env, "FOOD");
+    let initial_time = f.env.ledger().timestamp();
+    let expiry_time = initial_time + 100;
+
+    let v_id = f.client.issue_voucher(&ngo, &p_id, &beneficiary, &5_000, &food_cat, &expiry_time);
+    assert_eq!(f.client.get_program(&p_id).total_allocated, 5_000);
+
+    // Reclaiming BEFORE expiration fails with VoucherNotExpired
+    assert!(f.client.try_reclaim_expired(&ngo, &v_id).is_err());
+
+    // Advance ledger time past expiry
+    f.env.ledger().set_timestamp(expiry_time + 50);
+
+    // Beneficiary redemption now fails with VoucherExpired
+    let vendor = Address::generate(&f.env);
+    let mut cats = Vec::new(&f.env);
+    cats.push_back(food_cat.clone());
+    f.client.register_vendor(&f.admin, &vendor, &cats, &String::from_str(&f.env, "v"));
+    assert!(f.client.try_redeem(&beneficiary, &v_id, &vendor).is_err());
+
+    // Unauthorized non-NGO caller fails to reclaim
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_reclaim_expired(&rando, &v_id).is_err());
+
+    // NGO reclaims expired voucher
+    f.client.reclaim_expired(&ngo, &v_id);
+
+    // Voucher marked Reclaimed
+    let v_data = f.client.get_voucher(&v_id);
+    assert_eq!(v_data.status, crate::types::VoucherStatus::Reclaimed);
+
+    // Allocation freed: total_allocated reduced from 5,000 back to 0!
+    assert_eq!(f.client.get_program(&p_id).total_allocated, 0);
+
+    // Cannot reclaim again
+    assert!(f.client.try_reclaim_expired(&ngo, &v_id).is_err());
+
+    // NGO can re-issue a new voucher with the reclaimed capital
+    let ben2 = Address::generate(&f.env);
+    let new_expiry = f.env.ledger().timestamp() + 500;
+    let v2_id = f.client.issue_voucher(&ngo, &p_id, &ben2, &5_000, &food_cat, &new_expiry);
+    assert_eq!(v2_id, 2);
+    assert_eq!(f.client.get_program(&p_id).total_allocated, 5_000);
+}
+
+
 
 
 
