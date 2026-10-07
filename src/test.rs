@@ -685,6 +685,112 @@ fn test_program_cancellation_and_proportional_donor_refund() {
     assert!(f.client.try_claim_donor_refund(&rando, &p_id).is_err());
 }
 
+#[test]
+fn test_adversarial_unauthorized_state_mutation_attempts() {
+    let f = TestFixture::setup();
+    let rando = Address::generate(&f.env);
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Adversary attempts to set admin
+    assert!(f.client.try_set_admin(&rando, &rando).is_err());
+
+    // Adversary attempts to set emergency admin
+    assert!(f.client.try_set_emergency_admin(&rando, &Some(rando.clone())).is_err());
+
+    // Adversary attempts to pause contract
+    assert!(f.client.try_set_paused(&rando, &true).is_err());
+
+    // Adversary attempts to register vendor
+    let cats = Vec::new(&f.env);
+    assert!(f.client.try_register_vendor(&rando, &rando, &cats, &meta).is_err());
+
+    // Adversary attempts to remove vendor
+    assert!(f.client.try_remove_vendor(&rando, &rando).is_err());
+
+    // Adversary attempts to add milestone to another NGO's program
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(rando.clone());
+    assert!(f.client.try_add_milestone(&rando, &p_id, &1_000, &meta, &1, &verifiers).is_err());
+
+    // Adversary attempts to release milestone
+    assert!(f.client.try_release_milestone(&rando, &p_id, &1).is_err());
+
+    // Adversary attempts to issue voucher
+    let cat = Symbol::new(&f.env, "FOOD");
+    assert!(f.client.try_issue_voucher(&rando, &p_id, &rando, &100, &cat, &10_000).is_err());
+
+    // Adversary attempts to cancel program
+    assert!(f.client.try_cancel_program(&rando, &p_id).is_err());
+}
+
+#[test]
+fn test_platform_aggregate_stats_and_pagination() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog");
+
+    // Create 3 programs
+    let p1 = f.client.create_program(&ngo, &f.token_client.address, &meta);
+    let p2 = f.client.create_program(&ngo, &f.token_client.address, &meta);
+    let _p3 = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Add milestones to p1
+    let v = Address::generate(&f.env);
+    let mut vers = Vec::new(&f.env);
+    vers.push_back(v.clone());
+    let m1 = f.client.add_milestone(&ngo, &p1, &3_000, &meta, &1, &vers);
+    let _m2 = f.client.add_milestone(&ngo, &p1, &2_000, &meta, &1, &vers);
+
+    // Fund and release p1
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 10_000);
+    f.client.fund_program(&donor, &p1, &5_000);
+    f.client.approve_milestone(&v, &p1, &m1, &meta);
+    f.client.release_milestone(&ngo, &p1, &m1);
+
+    // Register vendor
+    let vendor = Address::generate(&f.env);
+    let cat = Symbol::new(&f.env, "FOOD");
+    let mut cats = Vec::new(&f.env);
+    cats.push_back(cat.clone());
+    f.client.register_vendor(&f.admin, &vendor, &cats, &meta);
+
+    // Issue and redeem voucher
+    let ben = Address::generate(&f.env);
+    let exp = f.env.ledger().timestamp() + 1_000;
+    let v_id = f.client.issue_voucher(&ngo, &p1, &ben, &1_500, &cat, &exp);
+    f.client.redeem(&ben, &v_id, &vendor);
+
+    // Verify aggregate stats
+    let stats = f.client.get_contract_stats();
+    assert_eq!(stats.total_programs, 3);
+    assert_eq!(stats.total_vouchers, 1);
+    assert_eq!(stats.total_vendors, 1);
+    assert_eq!(stats.total_funded_volume, 5_000);
+    assert_eq!(stats.total_released_volume, 3_000);
+    assert_eq!(stats.total_redeemed_volume, 1_500);
+
+    // Verify paginated program listing
+    let page1 = f.client.get_all_programs(&1, &2);
+    assert_eq!(page1.len(), 2);
+    assert_eq!(page1.get(0).unwrap().id, 1);
+    assert_eq!(page1.get(1).unwrap().id, 2);
+
+    let page2 = f.client.get_all_programs(&3, &2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2.get(0).unwrap().id, 3);
+
+    // Verify program milestones query
+    let p1_milestones = f.client.get_program_milestones(&p1);
+    assert_eq!(p1_milestones.len(), 2);
+
+    let p2_milestones = f.client.get_program_milestones(&p2);
+    assert_eq!(p2_milestones.len(), 0);
+}
+
+
 
 
 
