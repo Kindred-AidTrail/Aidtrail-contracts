@@ -303,6 +303,60 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Release an approved milestone, validating funded >= released accounting invariant.
+    pub fn release_milestone(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+        milestone_id: u32,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let mut program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut milestone = Storage::get_milestone(&env, program_id, milestone_id)
+            .ok_or(ContractError::MilestoneNotFound)?;
+
+        if milestone.status == MilestoneStatus::Released {
+            return Err(ContractError::MilestoneAlreadyReleased);
+        }
+        if milestone.status != MilestoneStatus::Approved {
+            return Err(ContractError::MilestoneNotApproved);
+        }
+
+        // Strict invariant: total_funded >= total_released + milestone.amount
+        let new_released = program
+            .total_released
+            .checked_add(milestone.amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        if program.total_funded < new_released {
+            return Err(ContractError::InsufficientProgramFunds);
+        }
+
+        program.total_released = new_released;
+        milestone.status = MilestoneStatus::Released;
+
+        Storage::set_program(&env, &program);
+        Storage::set_milestone(&env, &milestone);
+
+        Events::milestone_released(&env, program_id, milestone_id, milestone.amount);
+
+        Ok(())
+    }
+
     /// Query contribution record for a specific donor and program.
     pub fn get_donor_contribution(
         env: Env,
