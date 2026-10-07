@@ -8,9 +8,11 @@ pub mod types;
 use errors::ContractError;
 use events::Events;
 use storage::Storage;
-use types::{DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus};
+use types::{
+    DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus, Vendor, VendorStatus,
+};
 
-use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
 
 #[contract]
 pub struct AidtrailContract;
@@ -355,6 +357,59 @@ impl AidtrailContract {
         Events::milestone_released(&env, program_id, milestone_id, milestone.amount);
 
         Ok(())
+    }
+
+    /// Register a vendor with allowed redemption categories and metadata.
+    pub fn register_vendor(
+        env: Env,
+        caller: Address,
+        vendor_address: Address,
+        allowed_categories: Vec<Symbol>,
+        metadata_uri: String,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        if allowed_categories.is_empty() {
+            return Err(ContractError::VendorCategoryNotAllowed);
+        }
+
+        let existing = Storage::get_vendor(&env, &vendor_address);
+        if existing.is_none() {
+            let count = Storage::get_vendor_count(&env) + 1;
+            Storage::set_vendor_count(&env, count);
+        }
+
+        let total_redeemed = existing.map_or(0, |v| v.total_redeemed);
+        let vendor = Vendor {
+            address: vendor_address.clone(),
+            status: VendorStatus::Active,
+            allowed_categories: allowed_categories.clone(),
+            metadata_uri,
+            total_redeemed,
+        };
+
+        Storage::set_vendor(&env, &vendor);
+        Events::vendor_registered(&env, &vendor_address, &allowed_categories);
+
+        Ok(())
+    }
+
+    /// Query vendor profile by vendor address.
+    pub fn get_vendor(env: Env, vendor: Address) -> Result<Vendor, ContractError> {
+        Storage::get_vendor(&env, &vendor).ok_or(ContractError::VendorNotFound)
+    }
+
+    /// Query total number of registered vendors.
+    pub fn get_vendor_count(env: Env) -> u32 {
+        Storage::get_vendor_count(&env)
     }
 
     /// Query contribution record for a specific donor and program.
