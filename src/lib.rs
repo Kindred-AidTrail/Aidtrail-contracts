@@ -9,8 +9,8 @@ use errors::ContractError;
 use events::Events;
 use storage::Storage;
 use types::{
-    DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus, Vendor, VendorStatus,
-    Voucher, VoucherIssueRequest, VoucherStatus,
+    ContractStats, DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus, Vendor,
+    VendorStatus, Voucher, VoucherIssueRequest, VoucherStatus,
 };
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
@@ -831,6 +831,92 @@ impl AidtrailContract {
         );
 
         Ok(refund_amount)
+    }
+
+    /// Query global platform statistics for dashboard and audit explorer.
+    pub fn get_contract_stats(env: Env) -> ContractStats {
+        let total_programs = Storage::get_program_count(&env);
+        let total_vouchers = Storage::get_voucher_count(&env);
+        let total_vendors = Storage::get_vendor_count(&env);
+
+        let mut total_funded_volume: i128 = 0;
+        let mut total_released_volume: i128 = 0;
+
+        for id in 1..=total_programs {
+            if let Some(prog) = Storage::get_program(&env, id) {
+                total_funded_volume = total_funded_volume.saturating_add(prog.total_funded);
+                total_released_volume = total_released_volume.saturating_add(prog.total_released);
+            }
+        }
+
+        let mut total_redeemed_volume: i128 = 0;
+        for v_id in 1..=total_vouchers {
+            if let Some(voucher) = Storage::get_voucher(&env, v_id) {
+                if voucher.status == VoucherStatus::Redeemed {
+                    total_redeemed_volume = total_redeemed_volume.saturating_add(voucher.amount);
+                }
+            }
+        }
+
+        ContractStats {
+            total_programs,
+            total_vouchers,
+            total_vendors,
+            total_funded_volume,
+            total_released_volume,
+            total_redeemed_volume,
+        }
+    }
+
+    /// Retrieve paginated list of programs.
+    pub fn get_all_programs(env: Env, start_id: u64, limit: u32) -> Vec<Program> {
+        let mut programs = Vec::new(&env);
+        let total = Storage::get_program_count(&env);
+        if start_id == 0 || start_id > total {
+            return programs;
+        }
+
+        let end = (start_id + (limit as u64) - 1).min(total);
+        for id in start_id..=end {
+            if let Some(prog) = Storage::get_program(&env, id) {
+                programs.push_back(prog);
+            }
+        }
+        programs
+    }
+
+    /// Retrieve all milestones belonging to a program.
+    pub fn get_program_milestones(env: Env, program_id: u64) -> Vec<Milestone> {
+        let mut milestones = Vec::new(&env);
+        let count = Storage::get_milestone_count(&env, program_id);
+        for m_id in 1..=count {
+            if let Some(m) = Storage::get_milestone(&env, program_id, m_id) {
+                milestones.push_back(m);
+            }
+        }
+        milestones
+    }
+
+    /// Check if a milestone has reached its required approval threshold.
+    pub fn is_milestone_approved(env: Env, program_id: u64, milestone_id: u32) -> bool {
+        Storage::get_milestone(&env, program_id, milestone_id).map_or(false, |m| {
+            m.status == MilestoneStatus::Approved || m.status == MilestoneStatus::Released
+        })
+    }
+
+    /// Check if a vendor is active and permitted to redeem vouchers of a given category.
+    pub fn is_vendor_allowed(env: Env, vendor: Address, category: Symbol) -> bool {
+        Storage::get_vendor(&env, &vendor).map_or(false, |v| {
+            if v.status != VendorStatus::Active {
+                return false;
+            }
+            for cat in v.allowed_categories.iter() {
+                if cat == category {
+                    return true;
+                }
+            }
+            false
+        })
     }
 
     /// Query a voucher by its unique ID.
