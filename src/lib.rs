@@ -8,9 +8,9 @@ pub mod types;
 use errors::ContractError;
 use events::Events;
 use storage::Storage;
-use types::{Milestone, MilestoneStatus, Program, ProgramStatus};
+use types::{DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
+use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Vec};
 
 #[contract]
 pub struct AidtrailContract;
@@ -189,6 +189,68 @@ impl AidtrailContract {
         Events::milestone_added(&env, program_id, milestone_id, amount, required_approvals);
 
         Ok(milestone_id)
+    }
+
+    /// Donors fund an aid program by transferring tokens into contract custody.
+    pub fn fund_program(
+        env: Env,
+        donor: Address,
+        program_id: u64,
+        amount: i128,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        donor.require_auth();
+
+        let mut program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        // Accounting update with overflow guard (Checks-Effects-Interactions)
+        let new_funded = program
+            .total_funded
+            .checked_add(amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        program.total_funded = new_funded;
+        Storage::set_program(&env, &program);
+
+        // Update donor contribution tracking
+        let mut contribution = Storage::get_donor_contribution(&env, program_id, &donor)
+            .unwrap_or(DonorContribution {
+                donor: donor.clone(),
+                program_id,
+                amount: 0,
+                refunded: false,
+            });
+        let new_contrib = contribution
+            .amount
+            .checked_add(amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+        contribution.amount = new_contrib;
+        Storage::set_donor_contribution(&env, &contribution);
+
+        Events::program_funded(&env, program_id, &donor, amount);
+
+        // Interaction: pull tokens from donor to contract
+        let token_client = token::Client::new(&env, &program.token);
+        token_client.transfer(&donor, &env.current_contract_address(), &amount);
+
+        Ok(())
+    }
+
+    /// Query contribution record for a specific donor and program.
+    pub fn get_donor_contribution(
+        env: Env,
+        program_id: u64,
+        donor: Address,
+    ) -> Option<DonorContribution> {
+        Storage::get_donor_contribution(&env, program_id, &donor)
     }
 
     /// Query a milestone by program ID and milestone ID.
