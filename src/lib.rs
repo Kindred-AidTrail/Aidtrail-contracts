@@ -244,6 +244,65 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Submit independent verifier approval for a milestone with evidence.
+    pub fn approve_milestone(
+        env: Env,
+        verifier: Address,
+        program_id: u64,
+        milestone_id: u32,
+        _evidence_uri: String,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        verifier.require_auth();
+
+        let program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let mut milestone = Storage::get_milestone(&env, program_id, milestone_id)
+            .ok_or(ContractError::MilestoneNotFound)?;
+
+        if milestone.status == MilestoneStatus::Released {
+            return Err(ContractError::MilestoneAlreadyReleased);
+        }
+
+        // Validate that verifier is an authorized verifier for this milestone
+        let mut is_authorized = false;
+        for v in milestone.verifiers.iter() {
+            if v == verifier {
+                is_authorized = true;
+                break;
+            }
+        }
+        if !is_authorized {
+            return Err(ContractError::VerifierNotAuthorized);
+        }
+
+        // Ensure no duplicate approval from the same verifier
+        for app in milestone.approvals.iter() {
+            if app == verifier {
+                return Err(ContractError::DuplicateVerifierApproval);
+            }
+        }
+
+        milestone.approvals.push_back(verifier.clone());
+        let approvals_count = milestone.approvals.len();
+
+        // If threshold reached, transition status to Approved
+        if approvals_count >= milestone.required_approvals {
+            milestone.status = MilestoneStatus::Approved;
+        }
+
+        Storage::set_milestone(&env, &milestone);
+        Events::milestone_approved(&env, program_id, milestone_id, &verifier, approvals_count);
+
+        Ok(())
+    }
+
     /// Query contribution record for a specific donor and program.
     pub fn get_donor_contribution(
         env: Env,
