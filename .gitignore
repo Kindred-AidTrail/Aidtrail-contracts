@@ -5,3 +5,5 @@
 deployments/local.json
 node_modules/
 dist/
+.stellar/
+test_snapshots/
