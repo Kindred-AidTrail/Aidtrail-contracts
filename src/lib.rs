@@ -622,6 +622,76 @@ impl AidtrailContract {
         Ok(issued_ids)
     }
 
+    /// Redeem an active voucher at an approved vendor matching the voucher's category.
+    pub fn redeem(
+        env: Env,
+        beneficiary: Address,
+        voucher_id: u64,
+        vendor_address: Address,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        beneficiary.require_auth();
+
+        let mut voucher = Storage::get_voucher(&env, voucher_id)
+            .ok_or(ContractError::VoucherNotFound)?;
+
+        if voucher.beneficiary != beneficiary {
+            return Err(ContractError::Unauthorized);
+        }
+        if voucher.status != VoucherStatus::Active {
+            return Err(ContractError::VoucherNotActive);
+        }
+        if env.ledger().timestamp() >= voucher.expires_at {
+            return Err(ContractError::VoucherExpired);
+        }
+
+        let mut vendor = Storage::get_vendor(&env, &vendor_address)
+            .ok_or(ContractError::VendorNotFound)?;
+
+        if vendor.status != VendorStatus::Active {
+            return Err(ContractError::VendorNotActive);
+        }
+
+        // Enforce per-voucher category permission on the vendor
+        let mut category_allowed = false;
+        for cat in vendor.allowed_categories.iter() {
+            if cat == voucher.category {
+                category_allowed = true;
+                break;
+            }
+        }
+        if !category_allowed {
+            return Err(ContractError::VendorCategoryNotAllowed);
+        }
+
+        let program = Storage::get_program(&env, voucher.program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+
+        // Checks-Effects-Interactions: state updates occur BEFORE token transfer
+        voucher.status = VoucherStatus::Redeemed;
+        vendor.total_redeemed = vendor
+            .total_redeemed
+            .checked_add(voucher.amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        Storage::set_voucher(&env, &voucher);
+        Storage::set_vendor(&env, &vendor);
+
+        Events::voucher_redeemed(&env, voucher_id, &beneficiary, &vendor_address, voucher.amount);
+
+        // Direct payout to the vendor from contract balance
+        let token_client = token::Client::new(&env, &program.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &vendor_address,
+            &voucher.amount,
+        );
+
+        Ok(())
+    }
+
     /// Query a voucher by its unique ID.
     pub fn get_voucher(env: Env, voucher_id: u64) -> Result<Voucher, ContractError> {
         Storage::get_voucher(&env, voucher_id).ok_or(ContractError::VoucherNotFound)
