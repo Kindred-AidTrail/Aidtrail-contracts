@@ -8,9 +8,9 @@ pub mod types;
 use errors::ContractError;
 use events::Events;
 use storage::Storage;
-use types::{Program, ProgramStatus};
+use types::{Milestone, MilestoneStatus, Program, ProgramStatus};
 
-use soroban_sdk::{contract, contractimpl, Address, Env, String};
+use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
 #[contract]
 pub struct AidtrailContract;
@@ -125,6 +125,85 @@ impl AidtrailContract {
         Events::program_created(&env, program_id, &ngo, &token, &metadata_uri);
 
         Ok(program_id)
+    }
+
+    /// Add a milestone to an aid program with M-of-N verifier approval requirements.
+    pub fn add_milestone(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+        amount: i128,
+        description_uri: String,
+        required_approvals: u32,
+        verifiers: Vec<Address>,
+    ) -> Result<u32, ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+
+        let verifier_count = verifiers.len();
+        if required_approvals == 0 || required_approvals > verifier_count {
+            return Err(ContractError::InvalidMilestoneConfig);
+        }
+
+        // Ensure verifiers list has no duplicate addresses
+        for i in 0..verifier_count {
+            let v_i = verifiers.get(i).unwrap();
+            for j in (i + 1)..verifier_count {
+                let v_j = verifiers.get(j).unwrap();
+                if v_i == v_j {
+                    return Err(ContractError::InvalidMilestoneConfig);
+                }
+            }
+        }
+
+        let milestone_id = Storage::increment_milestone_count(&env, program_id);
+        let milestone = Milestone {
+            id: milestone_id,
+            program_id,
+            amount,
+            description_uri,
+            status: MilestoneStatus::Pending,
+            required_approvals,
+            verifiers,
+            approvals: Vec::new(&env),
+        };
+
+        Storage::set_milestone(&env, &milestone);
+        Events::milestone_added(&env, program_id, milestone_id, amount, required_approvals);
+
+        Ok(milestone_id)
+    }
+
+    /// Query a milestone by program ID and milestone ID.
+    pub fn get_milestone(
+        env: Env,
+        program_id: u64,
+        milestone_id: u32,
+    ) -> Result<Milestone, ContractError> {
+        Storage::get_milestone(&env, program_id, milestone_id)
+            .ok_or(ContractError::MilestoneNotFound)
+    }
+
+    /// Query the total number of milestones for a given program.
+    pub fn get_milestone_count(env: Env, program_id: u64) -> u32 {
+        Storage::get_milestone_count(&env, program_id)
     }
 
     /// Query a program by its ID.
