@@ -62,3 +62,67 @@ fn test_fixture_setup_works() {
     assert_eq!(f.client.is_paused(), false);
     assert_eq!(f.client.get_program_count(), 0);
 }
+
+#[test]
+fn test_cannot_reinitialize() {
+    let f = TestFixture::setup();
+    let res = f.client.try_initialize(&f.admin, &None);
+    assert!(res.is_err());
+}
+
+#[test]
+fn test_emergency_pause_and_unpause() {
+    let f = TestFixture::setup();
+
+    // Admin can pause
+    f.client.set_paused(&f.admin, &true);
+    assert_eq!(f.client.is_paused(), true);
+
+    // Emergency admin can unpause
+    f.client.set_paused(&f.emergency_admin, &false);
+    assert_eq!(f.client.is_paused(), false);
+
+    // Emergency admin can pause
+    f.client.set_paused(&f.emergency_admin, &true);
+    assert_eq!(f.client.is_paused(), true);
+
+    // Unauthorized user cannot toggle pause
+    let rando = Address::generate(&f.env);
+    let res = f.client.try_set_paused(&rando, &false);
+    assert!(res.is_err());
+    assert_eq!(f.client.is_paused(), true);
+}
+
+#[test]
+fn test_transfer_admin_and_emergency_admin() {
+    let f = TestFixture::setup();
+    let new_admin = Address::generate(&f.env);
+    let new_emergency = Address::generate(&f.env);
+
+    // Non-admin cannot transfer admin
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_set_admin(&rando, &new_admin).is_err());
+
+    // Current admin transfers ownership
+    f.client.set_admin(&f.admin, &new_admin);
+    assert_eq!(f.client.get_admin(), Some(new_admin.clone()));
+
+    // Old admin can no longer transfer
+    assert!(f.client.try_set_admin(&f.admin, &rando).is_err());
+
+    // New admin updates emergency admin
+    f.client.set_emergency_admin(&new_admin, &Some(new_emergency.clone()));
+    assert_eq!(f.client.get_emergency_admin(), Some(new_emergency));
+}
+
+#[test]
+fn test_paused_blocks_program_creation() {
+    let f = TestFixture::setup();
+    f.client.set_paused(&f.admin, &true);
+
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://meta");
+    let res = f.client.try_create_program(&ngo, &f.token_client.address, &meta);
+    assert!(res.is_err());
+}
+
