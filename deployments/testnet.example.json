@@ -1,0 +1,14 @@
+{
+  "network": "testnet",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "contractId": "CAIDTRAILCONTRACTIDTESTNET1234567890ABCDEF",
+  "contractAlias": "aidtrail",
+  "admin": "GDEPLOYERTESTNETACCOUNTADDRESS1234567890ABCDEF",
+  "tokens": {
+    "native": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    "usdc": "CBIELTK6YBZJU5UP2WWQEUCYKLPU6AUNZ2BQ4WWUIE3USNXOGXR6HG7A"
+  },
+  "wasmPath": "target/wasm32-unknown-unknown/release/aidtrail_contracts.wasm",
+  "deployedAt": "2026-10-07T16:00:00Z"
+}
