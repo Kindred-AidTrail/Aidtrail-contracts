@@ -5,6 +5,9 @@ pub mod events;
 pub mod storage;
 pub mod types;
 
+#[cfg(test)]
+mod test;
+
 use errors::ContractError;
 use events::Events;
 use storage::Storage;
