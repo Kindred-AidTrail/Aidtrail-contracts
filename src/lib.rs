@@ -8,8 +8,9 @@ pub mod types;
 use errors::ContractError;
 use events::Events;
 use storage::Storage;
+use types::{Program, ProgramStatus};
 
-use soroban_sdk::{contract, contractimpl, Address, Env};
+use soroban_sdk::{contract, contractimpl, Address, Env, String};
 
 #[contract]
 pub struct AidtrailContract;
@@ -89,6 +90,51 @@ impl AidtrailContract {
             Storage::set_emergency_admin(&env, em_admin);
         }
         Ok(())
+    }
+
+    /// Create a new aid program with specified payment token and metadata.
+    pub fn create_program(
+        env: Env,
+        ngo: Address,
+        token: Address,
+        metadata_uri: String,
+    ) -> Result<u64, ContractError> {
+        if Storage::get_admin(&env).is_none() {
+            return Err(ContractError::NotInitialized);
+        }
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        ngo.require_auth();
+
+        let program_id = Storage::increment_program_count(&env);
+        let program = Program {
+            id: program_id,
+            ngo: ngo.clone(),
+            token: token.clone(),
+            metadata_uri: metadata_uri.clone(),
+            status: ProgramStatus::Active,
+            total_funded: 0,
+            total_released: 0,
+            total_allocated: 0,
+            refundable_pool: 0,
+            created_at: env.ledger().timestamp(),
+        };
+
+        Storage::set_program(&env, &program);
+        Events::program_created(&env, program_id, &ngo, &token, &metadata_uri);
+
+        Ok(program_id)
+    }
+
+    /// Query a program by its ID.
+    pub fn get_program(env: Env, program_id: u64) -> Result<Program, ContractError> {
+        Storage::get_program(&env, program_id).ok_or(ContractError::ProgramNotFound)
+    }
+
+    /// Query total number of created programs.
+    pub fn get_program_count(env: Env) -> u64 {
+        Storage::get_program_count(&env)
     }
 
     /// Query whether contract operations are currently paused.
