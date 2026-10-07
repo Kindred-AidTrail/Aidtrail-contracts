@@ -620,6 +620,72 @@ fn test_reclaim_expired_voucher_returns_allocation() {
     assert_eq!(f.client.get_program(&p_id).total_allocated, 5_000);
 }
 
+#[test]
+fn test_program_cancellation_and_proportional_donor_refund() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-refund");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Milestone: 10,000
+    let v_verifier = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v_verifier.clone());
+    let m_id = f.client.add_milestone(
+        &ngo,
+        &p_id,
+        &10_000,
+        &String::from_str(&f.env, "m"),
+        &1,
+        &verifiers,
+    );
+
+    // Donor 1 funds 30,000 (75%)
+    let donor1 = Address::generate(&f.env);
+    f.mint(&donor1, 30_000);
+    f.client.fund_program(&donor1, &p_id, &30_000);
+
+    // Donor 2 funds 10,000 (25%)
+    let donor2 = Address::generate(&f.env);
+    f.mint(&donor2, 10_000);
+    f.client.fund_program(&donor2, &p_id, &10_000);
+
+    // Total funded = 40,000. Release 10,000.
+    f.client.approve_milestone(&v_verifier, &p_id, &m_id, &String::from_str(&f.env, "e"));
+    f.client.release_milestone(&ngo, &p_id, &m_id);
+    // Unreleased funds = 40,000 - 10,000 = 30,000
+
+    // Non-NGO/non-admin cannot cancel
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_cancel_program(&rando, &p_id).is_err());
+
+    // NGO cancels program
+    f.client.cancel_program(&ngo, &p_id);
+
+    let prog_cancelled = f.client.get_program(&p_id);
+    assert_eq!(prog_cancelled.status, crate::types::ProgramStatus::Cancelled);
+    assert_eq!(prog_cancelled.refundable_pool, 30_000);
+
+    // Donor 1 claims refund: 30,000 * 30,000 / 40,000 = 22,500
+    assert_eq!(f.token_client.balance(&donor1), 0);
+    let refund1 = f.client.claim_donor_refund(&donor1, &p_id);
+    assert_eq!(refund1, 22_500);
+    assert_eq!(f.token_client.balance(&donor1), 22_500);
+
+    // Donor 1 cannot claim twice
+    assert!(f.client.try_claim_donor_refund(&donor1, &p_id).is_err());
+
+    // Donor 2 claims refund: 10,000 * 30,000 / 40,000 = 7,500
+    assert_eq!(f.token_client.balance(&donor2), 0);
+    let refund2 = f.client.claim_donor_refund(&donor2, &p_id);
+    assert_eq!(refund2, 7_500);
+    assert_eq!(f.token_client.balance(&donor2), 7_500);
+
+    // Non-donor fails
+    assert!(f.client.try_claim_donor_refund(&rando, &p_id).is_err());
+}
+
+
 
 
 
