@@ -402,6 +402,64 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Suspend or remove a vendor from participating in voucher redemptions.
+    pub fn remove_vendor(
+        env: Env,
+        caller: Address,
+        vendor_address: Address,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut vendor = Storage::get_vendor(&env, &vendor_address)
+            .ok_or(ContractError::VendorNotFound)?;
+
+        vendor.status = VendorStatus::Suspended;
+        Storage::set_vendor(&env, &vendor);
+        Events::vendor_removed(&env, &vendor_address);
+
+        Ok(())
+    }
+
+    /// Update status of a vendor (Active or Suspended).
+    pub fn set_vendor_status(
+        env: Env,
+        caller: Address,
+        vendor_address: Address,
+        status: VendorStatus,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut vendor = Storage::get_vendor(&env, &vendor_address)
+            .ok_or(ContractError::VendorNotFound)?;
+
+        vendor.status = status;
+        Storage::set_vendor(&env, &vendor);
+
+        if status == VendorStatus::Suspended {
+            Events::vendor_removed(&env, &vendor_address);
+        } else {
+            Events::vendor_registered(&env, &vendor_address, &vendor.allowed_categories);
+        }
+
+        Ok(())
+    }
+
     /// Query vendor profile by vendor address.
     pub fn get_vendor(env: Env, vendor: Address) -> Result<Vendor, ContractError> {
         Storage::get_vendor(&env, &vendor).ok_or(ContractError::VendorNotFound)
