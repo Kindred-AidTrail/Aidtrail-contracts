@@ -233,5 +233,49 @@ fn test_fund_program_transfers_and_tracks_donor() {
     assert!(f.client.try_fund_program(&donor, &p_id, &-500).is_err());
 }
 
+#[test]
+fn test_multi_verifier_approval_consensus() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-m-of-n");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    let v1 = Address::generate(&f.env);
+    let v2 = Address::generate(&f.env);
+    let v3 = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v1.clone());
+    verifiers.push_back(v2.clone());
+    verifiers.push_back(v3.clone());
+
+    let m_desc = String::from_str(&f.env, "ipfs://m1");
+    let m_id = f.client.add_milestone(&ngo, &p_id, &5_000, &m_desc, &2, &verifiers);
+
+    let ev1 = String::from_str(&f.env, "ipfs://evidence1");
+    let ev2 = String::from_str(&f.env, "ipfs://evidence2");
+
+    // Verifier 1 approves (1 of 2): status still Pending
+    f.client.approve_milestone(&v1, &p_id, &m_id, &ev1);
+    let m_state = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(m_state.approvals.len(), 1);
+    assert_eq!(m_state.status, crate::types::MilestoneStatus::Pending);
+    assert_eq!(f.client.is_milestone_approved(&p_id, &m_id), false);
+
+    // Duplicate approval by Verifier 1 fails
+    assert!(f.client.try_approve_milestone(&v1, &p_id, &m_id, &ev1).is_err());
+
+    // Unauthorized verifier fails
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_approve_milestone(&rando, &p_id, &m_id, &ev1).is_err());
+
+    // Verifier 2 approves (2 of 2): status transitions to Approved!
+    f.client.approve_milestone(&v2, &p_id, &m_id, &ev2);
+    let m_approved = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(m_approved.approvals.len(), 2);
+    assert_eq!(m_approved.status, crate::types::MilestoneStatus::Approved);
+    assert_eq!(f.client.is_milestone_approved(&p_id, &m_id), true);
+}
+
+
 
 
