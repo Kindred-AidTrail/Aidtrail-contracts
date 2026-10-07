@@ -276,6 +276,58 @@ fn test_multi_verifier_approval_consensus() {
     assert_eq!(f.client.is_milestone_approved(&p_id, &m_id), true);
 }
 
+#[test]
+fn test_release_milestone_success_and_invariants() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-rel");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    let v1 = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v1.clone());
+
+    let m_desc = String::from_str(&f.env, "ipfs://m1");
+    let m_id = f.client.add_milestone(&ngo, &p_id, &10_000, &m_desc, &1, &verifiers);
+
+    // Cannot release unapproved milestone
+    assert!(f.client.try_release_milestone(&ngo, &p_id, &m_id).is_err());
+
+    // Verifier approves
+    let ev = String::from_str(&f.env, "ipfs://ev");
+    f.client.approve_milestone(&v1, &p_id, &m_id, &ev);
+
+    // Cannot release unfunded milestone
+    assert!(f.client.try_release_milestone(&ngo, &p_id, &m_id).is_err());
+
+    // Donor funds 6,000 (still less than 10,000 required)
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 20_000);
+    f.client.fund_program(&donor, &p_id, &6_000);
+    assert!(f.client.try_release_milestone(&ngo, &p_id, &m_id).is_err());
+
+    // Donor funds additional 5,000 (total = 11,000)
+    f.client.fund_program(&donor, &p_id, &5_000);
+
+    // Non-NGO/non-admin caller cannot release
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_release_milestone(&rando, &p_id, &m_id).is_err());
+
+    // NGO releases milestone
+    f.client.release_milestone(&ngo, &p_id, &m_id);
+
+    let prog = f.client.get_program(&p_id);
+    assert_eq!(prog.total_funded, 11_000);
+    assert_eq!(prog.total_released, 10_000);
+
+    let m_rel = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(m_rel.status, crate::types::MilestoneStatus::Released);
+
+    // Cannot re-release already released milestone
+    assert!(f.client.try_release_milestone(&ngo, &p_id, &m_id).is_err());
+}
+
+
 
 
 
