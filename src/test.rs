@@ -126,3 +126,74 @@ fn test_paused_blocks_program_creation() {
     assert!(res.is_err());
 }
 
+#[test]
+fn test_create_program_and_getters() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://program-alpha");
+
+    let p1 = f.client.create_program(&ngo, &f.token_client.address, &meta);
+    assert_eq!(p1, 1);
+    assert_eq!(f.client.get_program_count(), 1);
+
+    let prog = f.client.get_program(&p1);
+    assert_eq!(prog.id, 1);
+    assert_eq!(prog.ngo, ngo);
+    assert_eq!(prog.status, ProgramStatus::Active);
+    assert_eq!(prog.total_funded, 0);
+    assert_eq!(prog.total_released, 0);
+    assert_eq!(prog.total_allocated, 0);
+
+    // Query non-existent program
+    assert!(f.client.try_get_program(&999).is_err());
+}
+
+#[test]
+fn test_add_milestone_and_validations() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    let v1 = Address::generate(&f.env);
+    let v2 = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v1.clone());
+    verifiers.push_back(v2.clone());
+
+    let m_desc = String::from_str(&f.env, "ipfs://milestone-1");
+
+    // Success: 2 verifiers, 2 required approvals, 1,000 stroops
+    let m_id = f.client.add_milestone(&ngo, &p_id, &1_000, &m_desc, &2, &verifiers);
+    assert_eq!(m_id, 1);
+    assert_eq!(f.client.get_milestone_count(&p_id), 1);
+
+    let milestone = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(milestone.id, 1);
+    assert_eq!(milestone.amount, 1_000);
+    assert_eq!(milestone.required_approvals, 2);
+    assert_eq!(milestone.verifiers.len(), 2);
+    assert_eq!(milestone.approvals.len(), 0);
+
+    // Fail: unauthorized caller
+    let rando = Address::generate(&f.env);
+    assert!(f.client.try_add_milestone(&rando, &p_id, &500, &m_desc, &1, &verifiers).is_err());
+
+    // Fail: invalid amount <= 0
+    assert!(f.client.try_add_milestone(&ngo, &p_id, &0, &m_desc, &1, &verifiers).is_err());
+    assert!(f.client.try_add_milestone(&ngo, &p_id, &-10, &m_desc, &1, &verifiers).is_err());
+
+    // Fail: required_approvals > verifiers.len()
+    assert!(f.client.try_add_milestone(&ngo, &p_id, &500, &m_desc, &3, &verifiers).is_err());
+
+    // Fail: required_approvals == 0
+    assert!(f.client.try_add_milestone(&ngo, &p_id, &500, &m_desc, &0, &verifiers).is_err());
+
+    // Fail: duplicate verifier in list
+    let mut dup_verifiers = Vec::new(&f.env);
+    dup_verifiers.push_back(v1.clone());
+    dup_verifiers.push_back(v1.clone());
+    assert!(f.client.try_add_milestone(&ngo, &p_id, &500, &m_desc, &2, &dup_verifiers).is_err());
+}
+
+
