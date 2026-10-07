@@ -1,0 +1,36 @@
+name: Aidtrail Contracts CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-and-build:
+    name: Test and Build WASM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run unit test suite
+        run: cargo test
+
+      - name: Build contract WASM
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Verify WASM artifact
+        run: |
+          ls -lh target/wasm32-unknown-unknown/release/aidtrail_contracts.wasm
