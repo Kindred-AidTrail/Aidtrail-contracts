@@ -10,6 +10,7 @@ use events::Events;
 use storage::Storage;
 use types::{
     DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus, Vendor, VendorStatus,
+    Voucher, VoucherStatus,
 };
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
@@ -458,6 +459,88 @@ impl AidtrailContract {
         }
 
         Ok(())
+    }
+
+    /// Issue a voucher to a beneficiary against unlocked milestone funds.
+    pub fn issue_voucher(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+        beneficiary: Address,
+        amount: i128,
+        category: Symbol,
+        expires_at: u64,
+    ) -> Result<u64, ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let mut program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        if expires_at <= env.ledger().timestamp() {
+            return Err(ContractError::InvalidExpiration);
+        }
+
+        // Invariant: total_released >= total_allocated + amount
+        let new_allocated = program
+            .total_allocated
+            .checked_add(amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        if program.total_released < new_allocated {
+            return Err(ContractError::InsufficientProgramFunds);
+        }
+
+        program.total_allocated = new_allocated;
+        Storage::set_program(&env, &program);
+
+        let voucher_id = Storage::increment_voucher_count(&env);
+        let voucher = Voucher {
+            id: voucher_id,
+            program_id,
+            beneficiary: beneficiary.clone(),
+            amount,
+            category: category.clone(),
+            status: VoucherStatus::Active,
+            expires_at,
+            created_at: env.ledger().timestamp(),
+        };
+
+        Storage::set_voucher(&env, &voucher);
+        Events::voucher_issued(
+            &env,
+            voucher_id,
+            program_id,
+            &beneficiary,
+            amount,
+            &category,
+            expires_at,
+        );
+
+        Ok(voucher_id)
+    }
+
+    /// Query a voucher by its unique ID.
+    pub fn get_voucher(env: Env, voucher_id: u64) -> Result<Voucher, ContractError> {
+        Storage::get_voucher(&env, voucher_id).ok_or(ContractError::VoucherNotFound)
+    }
+
+    /// Query total number of vouchers created.
+    pub fn get_voucher_count(env: Env) -> u64 {
+        Storage::get_voucher_count(&env)
     }
 
     /// Query vendor profile by vendor address.
