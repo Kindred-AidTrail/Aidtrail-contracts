@@ -463,6 +463,90 @@ fn test_issue_voucher_and_batch_issuance() {
     assert!(f.client.try_batch_issue_vouchers(&ngo, &p_id, &empty_batch).is_err());
 }
 
+#[test]
+fn test_redeem_success_and_direct_vendor_payout() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Setup milestone (10,000) and funding (10,000)
+    let v_verifier = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v_verifier.clone());
+    let m_id = f.client.add_milestone(
+        &ngo,
+        &p_id,
+        &10_000,
+        &String::from_str(&f.env, "m"),
+        &1,
+        &verifiers,
+    );
+
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 10_000);
+    f.client.fund_program(&donor, &p_id, &10_000);
+
+    f.client.approve_milestone(&v_verifier, &p_id, &m_id, &String::from_str(&f.env, "e"));
+    f.client.release_milestone(&ngo, &p_id, &m_id);
+
+    // Register 2 vendors: FoodVendor (FOOD) and MedVendor (MEDICINE)
+    let food_vendor = Address::generate(&f.env);
+    let med_vendor = Address::generate(&f.env);
+    let food_cat = Symbol::new(&f.env, "FOOD");
+    let med_cat = Symbol::new(&f.env, "MEDICINE");
+
+    let mut food_cats = Vec::new(&f.env);
+    food_cats.push_back(food_cat.clone());
+    f.client.register_vendor(
+        &f.admin,
+        &food_vendor,
+        &food_cats,
+        &String::from_str(&f.env, "v1"),
+    );
+
+    let mut med_cats = Vec::new(&f.env);
+    med_cats.push_back(med_cat.clone());
+    f.client.register_vendor(
+        &f.admin,
+        &med_vendor,
+        &med_cats,
+        &String::from_str(&f.env, "v2"),
+    );
+
+    // Issue 3,000 FOOD voucher to beneficiary
+    let beneficiary = Address::generate(&f.env);
+    let expires = f.env.ledger().timestamp() + 86_400;
+    let v_id = f.client.issue_voucher(&ngo, &p_id, &beneficiary, &3_000, &food_cat, &expires);
+
+    // Fail: Trying to redeem FOOD voucher at MedVendor (category mismatch)
+    assert!(f.client.try_redeem(&beneficiary, &v_id, &med_vendor).is_err());
+
+    // Fail: Unauthorized caller (not beneficiary)
+    let imposter = Address::generate(&f.env);
+    assert!(f.client.try_redeem(&imposter, &v_id, &food_vendor).is_err());
+
+    // Success: Beneficiary redeems at FoodVendor
+    assert_eq!(f.token_client.balance(&food_vendor), 0);
+    assert_eq!(f.token_client.balance(&f.contract_id), 10_000);
+
+    f.client.redeem(&beneficiary, &v_id, &food_vendor);
+
+    // Direct payout verified: FoodVendor receives 3,000, contract balance is 7,000
+    assert_eq!(f.token_client.balance(&food_vendor), 3_000);
+    assert_eq!(f.token_client.balance(&f.contract_id), 7_000);
+
+    let voucher_post = f.client.get_voucher(&v_id);
+    assert_eq!(voucher_post.status, crate::types::VoucherStatus::Redeemed);
+
+    let vendor_post = f.client.get_vendor(&food_vendor);
+    assert_eq!(vendor_post.total_redeemed, 3_000);
+
+    // Fail: Cannot double-redeem
+    assert!(f.client.try_redeem(&beneficiary, &v_id, &food_vendor).is_err());
+}
+
+
 
 
 
