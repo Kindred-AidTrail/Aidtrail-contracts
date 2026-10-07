@@ -10,7 +10,7 @@ use events::Events;
 use storage::Storage;
 use types::{
     DonorContribution, Milestone, MilestoneStatus, Program, ProgramStatus, Vendor, VendorStatus,
-    Voucher, VoucherStatus,
+    Voucher, VoucherIssueRequest, VoucherStatus,
 };
 
 use soroban_sdk::{contract, contractimpl, token, Address, Env, String, Symbol, Vec};
@@ -531,6 +531,95 @@ impl AidtrailContract {
         );
 
         Ok(voucher_id)
+    }
+
+    /// Batch issue vouchers to beneficiaries in a single transaction.
+    pub fn batch_issue_vouchers(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+        vouchers: Vec<VoucherIssueRequest>,
+    ) -> Result<Vec<u64>, ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let mut program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let count = vouchers.len();
+        if count == 0 {
+            return Err(ContractError::EmptyBatch);
+        }
+        if count > 50 {
+            return Err(ContractError::BatchSizeExceeded);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let mut total_batch_amount: i128 = 0;
+
+        for req in vouchers.iter() {
+            if req.amount <= 0 {
+                return Err(ContractError::InvalidAmount);
+            }
+            if req.expires_at <= current_time {
+                return Err(ContractError::InvalidExpiration);
+            }
+            total_batch_amount = total_batch_amount
+                .checked_add(req.amount)
+                .ok_or(ContractError::ArithmeticOverflow)?;
+        }
+
+        // Invariant: total_released >= total_allocated + total_batch_amount
+        let new_allocated = program
+            .total_allocated
+            .checked_add(total_batch_amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        if program.total_released < new_allocated {
+            return Err(ContractError::InsufficientProgramFunds);
+        }
+
+        program.total_allocated = new_allocated;
+        Storage::set_program(&env, &program);
+
+        let mut issued_ids: Vec<u64> = Vec::new(&env);
+        for req in vouchers.iter() {
+            let voucher_id = Storage::increment_voucher_count(&env);
+            let voucher = Voucher {
+                id: voucher_id,
+                program_id,
+                beneficiary: req.beneficiary.clone(),
+                amount: req.amount,
+                category: req.category.clone(),
+                status: VoucherStatus::Active,
+                expires_at: req.expires_at,
+                created_at: current_time,
+            };
+
+            Storage::set_voucher(&env, &voucher);
+            Events::voucher_issued(
+                &env,
+                voucher_id,
+                program_id,
+                &req.beneficiary,
+                req.amount,
+                &req.category,
+                req.expires_at,
+            );
+            issued_ids.push_back(voucher_id);
+        }
+
+        Ok(issued_ids)
     }
 
     /// Query a voucher by its unique ID.
