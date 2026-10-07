@@ -196,4 +196,42 @@ fn test_add_milestone_and_validations() {
     assert!(f.client.try_add_milestone(&ngo, &p_id, &500, &m_desc, &2, &dup_verifiers).is_err());
 }
 
+#[test]
+fn test_fund_program_transfers_and_tracks_donor() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-fund");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 50_000);
+
+    // Initial funding of 20,000
+    f.client.fund_program(&donor, &p_id, &20_000);
+
+    assert_eq!(f.token_client.balance(&f.contract_id), 20_000);
+    assert_eq!(f.token_client.balance(&donor), 30_000);
+
+    let prog = f.client.get_program(&p_id);
+    assert_eq!(prog.total_funded, 20_000);
+
+    let contrib = f.client.get_donor_contribution(&p_id, &donor).unwrap();
+    assert_eq!(contrib.amount, 20_000);
+    assert_eq!(contrib.refunded, false);
+
+    // Subsequent funding of 10,000 accumulates
+    f.client.fund_program(&donor, &p_id, &10_000);
+    assert_eq!(f.token_client.balance(&f.contract_id), 30_000);
+    assert_eq!(f.token_client.balance(&donor), 20_000);
+
+    let contrib2 = f.client.get_donor_contribution(&p_id, &donor).unwrap();
+    assert_eq!(contrib2.amount, 30_000);
+    assert_eq!(f.client.get_program(&p_id).total_funded, 30_000);
+
+    // Invalid amounts fail
+    assert!(f.client.try_fund_program(&donor, &p_id, &0).is_err());
+    assert!(f.client.try_fund_program(&donor, &p_id, &-500).is_err());
+}
+
+
 
