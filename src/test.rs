@@ -375,6 +375,95 @@ fn test_vendor_registration_removal_and_categories() {
     assert_eq!(f.client.is_vendor_allowed(&vendor, &food), true);
 }
 
+#[test]
+fn test_issue_voucher_and_batch_issuance() {
+    let f = TestFixture::setup();
+    let ngo = Address::generate(&f.env);
+    let meta = String::from_str(&f.env, "ipfs://prog-voucher");
+    let p_id = f.client.create_program(&ngo, &f.token_client.address, &meta);
+
+    // Setup milestone and funding
+    let v1 = Address::generate(&f.env);
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(v1.clone());
+    let m_id = f.client.add_milestone(
+        &ngo,
+        &p_id,
+        &10_000,
+        &String::from_str(&f.env, "m"),
+        &1,
+        &verifiers,
+    );
+
+    let donor = Address::generate(&f.env);
+    f.mint(&donor, 20_000);
+    f.client.fund_program(&donor, &p_id, &20_000);
+
+    // Verifier approves & NGO releases
+    f.client.approve_milestone(&v1, &p_id, &m_id, &String::from_str(&f.env, "e"));
+    f.client.release_milestone(&ngo, &p_id, &m_id);
+    // Program released = 10,000
+
+    let ben1 = Address::generate(&f.env);
+    let food = Symbol::new(&f.env, "FOOD");
+    let expires = f.env.ledger().timestamp() + 86_400; // 1 day future
+
+    // Issue voucher: 4,000
+    let v_id1 = f.client.issue_voucher(&ngo, &p_id, &ben1, &4_000, &food, &expires);
+    assert_eq!(v_id1, 1);
+    assert_eq!(f.client.get_voucher_count(), 1);
+
+    let v1_data = f.client.get_voucher(&v_id1);
+    assert_eq!(v1_data.amount, 4_000);
+    assert_eq!(v1_data.beneficiary, ben1);
+    assert_eq!(v1_data.category, food);
+    assert_eq!(v1_data.status, crate::types::VoucherStatus::Active);
+
+    let prog_state = f.client.get_program(&p_id);
+    assert_eq!(prog_state.total_allocated, 4_000);
+
+    // Batch issuance: 3 vouchers of 2,000 each = 6,000 (remaining released: 6,000)
+    let ben2 = Address::generate(&f.env);
+    let ben3 = Address::generate(&f.env);
+    let ben4 = Address::generate(&f.env);
+
+    let mut batch = Vec::new(&f.env);
+    batch.push_back(VoucherIssueRequest {
+        beneficiary: ben2,
+        amount: 2_000,
+        category: food.clone(),
+        expires_at: expires,
+    });
+    batch.push_back(VoucherIssueRequest {
+        beneficiary: ben3,
+        amount: 2_000,
+        category: food.clone(),
+        expires_at: expires,
+    });
+    batch.push_back(VoucherIssueRequest {
+        beneficiary: ben4,
+        amount: 2_000,
+        category: food.clone(),
+        expires_at: expires,
+    });
+
+    let issued = f.client.batch_issue_vouchers(&ngo, &p_id, &batch);
+    assert_eq!(issued.len(), 3);
+    assert_eq!(f.client.get_voucher_count(), 4);
+
+    let prog_full = f.client.get_program(&p_id);
+    assert_eq!(prog_full.total_allocated, 10_000);
+
+    // Over-allocation fails (no more released funds available)
+    let ben5 = Address::generate(&f.env);
+    assert!(f.client.try_issue_voucher(&ngo, &p_id, &ben5, &500, &food, &expires).is_err());
+
+    // Empty batch fails
+    let empty_batch = Vec::new(&f.env);
+    assert!(f.client.try_batch_issue_vouchers(&ngo, &p_id, &empty_batch).is_err());
+}
+
+
 
 
 
