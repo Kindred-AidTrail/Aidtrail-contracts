@@ -692,6 +692,51 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Reclaim funds from an expired, unredeemed voucher back to the program allocation pool.
+    pub fn reclaim_expired(
+        env: Env,
+        caller: Address,
+        voucher_id: u64,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let mut voucher = Storage::get_voucher(&env, voucher_id)
+            .ok_or(ContractError::VoucherNotFound)?;
+
+        if voucher.status != VoucherStatus::Active {
+            return Err(ContractError::VoucherNotActive);
+        }
+        if env.ledger().timestamp() < voucher.expires_at {
+            return Err(ContractError::VoucherNotExpired);
+        }
+
+        let mut program = Storage::get_program(&env, voucher.program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        // Return amount to unallocated pool: decrement total_allocated
+        program.total_allocated = program
+            .total_allocated
+            .checked_sub(voucher.amount)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        voucher.status = VoucherStatus::Reclaimed;
+
+        Storage::set_voucher(&env, &voucher);
+        Storage::set_program(&env, &program);
+
+        Events::voucher_reclaimed(&env, voucher_id, voucher.program_id, voucher.amount);
+
+        Ok(())
+    }
+
     /// Query a voucher by its unique ID.
     pub fn get_voucher(env: Env, voucher_id: u64) -> Result<Voucher, ContractError> {
         Storage::get_voucher(&env, voucher_id).ok_or(ContractError::VoucherNotFound)
