@@ -737,6 +737,102 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Cancel an active aid program, freezing unreleased funds into a refundable donor pool.
+    pub fn cancel_program(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let mut program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        // Calculate unreleased funds available for donor refund
+        let refundable_pool = if program.total_funded > program.total_released {
+            program
+                .total_funded
+                .checked_sub(program.total_released)
+                .ok_or(ContractError::ArithmeticOverflow)?
+        } else {
+            0
+        };
+
+        program.status = ProgramStatus::Cancelled;
+        program.refundable_pool = refundable_pool;
+        Storage::set_program(&env, &program);
+
+        Events::program_cancelled(&env, program_id, refundable_pool);
+
+        Ok(())
+    }
+
+    /// Claim proportional refund of unreleased program capital as a donor.
+    pub fn claim_donor_refund(
+        env: Env,
+        donor: Address,
+        program_id: u64,
+    ) -> Result<i128, ContractError> {
+        donor.require_auth();
+
+        let program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+
+        if program.status != ProgramStatus::Cancelled {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        if program.refundable_pool <= 0 || program.total_funded <= 0 {
+            return Err(ContractError::NothingToRefund);
+        }
+
+        let mut contribution = Storage::get_donor_contribution(&env, program_id, &donor)
+            .ok_or(ContractError::DonorContributionNotFound)?;
+
+        if contribution.refunded || contribution.amount <= 0 {
+            return Err(ContractError::AlreadyRefunded);
+        }
+
+        // Proportional refund: (donor_contrib * refundable_pool) / total_funded
+        let refund_amount = contribution
+            .amount
+            .checked_mul(program.refundable_pool)
+            .ok_or(ContractError::ArithmeticOverflow)?
+            .checked_div(program.total_funded)
+            .ok_or(ContractError::ArithmeticOverflow)?;
+
+        if refund_amount <= 0 {
+            return Err(ContractError::NothingToRefund);
+        }
+
+        // Checks-Effects-Interactions: record refund before token transfer
+        contribution.refunded = true;
+        Storage::set_donor_contribution(&env, &contribution);
+
+        Events::donor_refunded(&env, program_id, &donor, refund_amount);
+
+        let token_client = token::Client::new(&env, &program.token);
+        token_client.transfer(
+            &env.current_contract_address(),
+            &donor,
+            &refund_amount,
+        );
+
+        Ok(refund_amount)
+    }
+
     /// Query a voucher by its unique ID.
     pub fn get_voucher(env: Env, voucher_id: u64) -> Result<Voucher, ContractError> {
         Storage::get_voucher(&env, voucher_id).ok_or(ContractError::VoucherNotFound)
