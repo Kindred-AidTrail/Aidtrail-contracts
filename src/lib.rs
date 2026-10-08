@@ -309,6 +309,80 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Update or rotate verifiers and quorum for an active milestone.
+    pub fn update_milestone_verifiers(
+        env: Env,
+        caller: Address,
+        program_id: u64,
+        milestone_id: u32,
+        required_approvals: u32,
+        verifiers: Vec<Address>,
+    ) -> Result<(), ContractError> {
+        if Storage::is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+        caller.require_auth();
+
+        let program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        if program.status != ProgramStatus::Active {
+            return Err(ContractError::ProgramNotActive);
+        }
+
+        let admin = Storage::get_admin(&env).ok_or(ContractError::NotInitialized)?;
+        if caller != program.ngo && caller != admin {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut milestone = Storage::get_milestone(&env, program_id, milestone_id)
+            .ok_or(ContractError::MilestoneNotFound)?;
+
+        if milestone.status == MilestoneStatus::Released {
+            return Err(ContractError::MilestoneAlreadyReleased);
+        }
+
+        let verifier_count = verifiers.len();
+        if required_approvals == 0 || required_approvals > verifier_count {
+            return Err(ContractError::InvalidMilestoneConfig);
+        }
+
+        for i in 0..verifier_count {
+            let v_i = verifiers.get(i).unwrap();
+            for j in (i + 1)..verifier_count {
+                let v_j = verifiers.get(j).unwrap();
+                if v_i == v_j {
+                    return Err(ContractError::InvalidMilestoneConfig);
+                }
+            }
+        }
+
+        milestone.verifiers = verifiers;
+        milestone.required_approvals = required_approvals;
+
+        // Preserve approvals that are still in the new verifiers list
+        let mut valid_approvals = Vec::new(&env);
+        for existing_app in milestone.approvals.iter() {
+            for v in milestone.verifiers.iter() {
+                if existing_app == v {
+                    valid_approvals.push_back(existing_app.clone());
+                    break;
+                }
+            }
+        }
+        milestone.approvals = valid_approvals;
+
+        if milestone.approvals.len() >= milestone.required_approvals {
+            milestone.status = MilestoneStatus::Approved;
+        } else {
+            milestone.status = MilestoneStatus::Pending;
+        }
+
+        Storage::set_milestone(&env, &milestone);
+        Events::milestone_verifiers_updated(&env, program_id, milestone_id, required_approvals);
+
+        Ok(())
+    }
+
     /// Release an approved milestone, validating funded >= released accounting invariant.
     pub fn release_milestone(
         env: Env,
@@ -695,6 +769,16 @@ impl AidtrailContract {
         Ok(())
     }
 
+    /// Alias for redeem to provide consistent client compatibility.
+    pub fn redeem_voucher(
+        env: Env,
+        beneficiary: Address,
+        voucher_id: u64,
+        vendor_address: Address,
+    ) -> Result<(), ContractError> {
+        Self::redeem(env, beneficiary, voucher_id, vendor_address)
+    }
+
     /// Reclaim funds from an expired, unredeemed voucher back to the program allocation pool.
     pub fn reclaim_expired(
         env: Env,
@@ -989,5 +1073,18 @@ impl AidtrailContract {
     /// Query current contract emergency admin address.
     pub fn get_emergency_admin(env: Env) -> Option<Address> {
         Storage::get_emergency_admin(&env)
+    }
+
+    /// Explicitly refresh/extend contract instance TTL for production archival resilience.
+    pub fn bump_contract_instance(env: Env) -> Result<(), ContractError> {
+        Storage::extend_instance_ttl(&env);
+        Ok(())
+    }
+
+    /// Explicitly refresh/extend program persistent storage TTL.
+    pub fn bump_program_storage(env: Env, program_id: u64) -> Result<(), ContractError> {
+        let _program = Storage::get_program(&env, program_id)
+            .ok_or(ContractError::ProgramNotFound)?;
+        Ok(())
     }
 }

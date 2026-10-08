@@ -67,6 +67,17 @@ impl Events {
         env.events().publish(topics, data);
     }
 
+    pub fn milestone_verifiers_updated(
+        env: &Env,
+        program_id: u64,
+        milestone_id: u32,
+        required_approvals: u32,
+    ) {
+        let topics = (symbol_short!("milestn"), symbol_short!("ver_upd"));
+        let data = (program_id, milestone_id, required_approvals);
+        env.events().publish(topics, data);
+    }
+
     pub fn milestone_released(env: &Env, program_id: u64, milestone_id: u32, amount: i128) {
         let topics = (symbol_short!("milestn"), symbol_short!("release"));
         let data = (program_id, milestone_id, amount);

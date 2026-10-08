@@ -790,6 +790,91 @@ fn test_platform_aggregate_stats_and_pagination() {
     assert_eq!(p2_milestones.len(), 0);
 }
 
+#[test]
+fn test_update_milestone_verifiers_rotation() {
+    let f = TestFixture::init();
+    let p_id = f.create_default_program();
+
+    let mut verifiers = Vec::new(&f.env);
+    verifiers.push_back(f.verifier1.clone());
+    verifiers.push_back(f.verifier2.clone());
+
+    let m_id = f.client.add_milestone(
+        &f.ngo,
+        &p_id,
+        &5_000,
+        &String::from_str(&f.env, "ipfs://evidence-v1"),
+        &2,
+        &verifiers,
+    );
+
+    // Rotate verifiers: replace verifier2 with verifier3
+    let mut new_verifiers = Vec::new(&f.env);
+    new_verifiers.push_back(f.verifier1.clone());
+    new_verifiers.push_back(f.verifier3.clone());
+
+    f.client.update_milestone_verifiers(
+        &f.ngo,
+        &p_id,
+        &m_id,
+        &2,
+        &new_verifiers,
+    );
+
+    let updated_milestone = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(updated_milestone.verifiers.len(), 2);
+    assert_eq!(updated_milestone.verifiers.get(1).unwrap(), f.verifier3);
+
+    // Verifier3 can now approve
+    f.client.approve_milestone(
+        &f.verifier3,
+        &p_id,
+        &m_id,
+        &String::from_str(&f.env, "ipfs://evidence-approval"),
+    );
+
+    let m_after_app = f.client.get_milestone(&p_id, &m_id);
+    assert_eq!(m_after_app.approvals.len(), 1);
+}
+
+#[test]
+fn test_redeem_voucher_alias_and_ttl_bump() {
+    let f = TestFixture::init();
+    let p_id = f.create_default_program();
+    f.fund_program(p_id, 10_000, &f.donor1);
+
+    let m_id = f.add_default_milestone(p_id, 10_000, 1);
+    f.client.approve_milestone(
+        &f.verifier1,
+        &p_id,
+        &m_id,
+        &String::from_str(&f.env, "ipfs://evidence"),
+    );
+    f.client.release_milestone(&f.ngo, &p_id, &m_id);
+
+    f.register_default_vendor(&f.vendor1);
+
+    let v_id = f.client.issue_voucher(
+        &f.ngo,
+        &p_id,
+        &f.beneficiary1,
+        &2_500,
+        &Symbol::new(&f.env, "FOOD"),
+        &(f.env.ledger().timestamp() + 86400),
+    );
+
+    // Test redeem_voucher alias
+    f.client.redeem_voucher(&f.beneficiary1, &v_id, &f.vendor1);
+
+    let voucher = f.client.get_voucher(&v_id);
+    assert_eq!(voucher.status, VoucherStatus::Redeemed);
+
+    // Test TTL bumps
+    assert!(f.client.bump_contract_instance().is_ok());
+    assert!(f.client.bump_program_storage(&p_id).is_ok());
+}
+
+
 
 
 
